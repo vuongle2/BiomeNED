@@ -39,7 +39,7 @@ def read_csv_table(filename, output_dict=False):
         output = (row_name, col_name, data)
     return output
 
-"""
+
 def idx2onehot(idx, n):
 
     assert torch.max(idx).item() < n
@@ -50,7 +50,7 @@ def idx2onehot(idx, n):
     onehot.scatter_(1, idx, 1)
 
     return onehot
-
+"""
 def load_data(data_file):
     with open(data_file,"rb") as df:
         content = pickle.load(df)

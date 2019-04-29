@@ -14,81 +14,90 @@ from collections import defaultdict
 import logging
 import tensorboard_logger as tl
 
-from models import CCA, AE, VAE
+from models import  AE, VAE
 
 DATA_ROOT = "/data/BioHealth/IBD"
-
+output_dir = os.path.join(DATA_ROOT, "output")
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
 parser = argparse.ArgumentParser()
 FORMAT = '[%(asctime)s: %(filename)s: %(lineno)4d]: %(message)s'
 logging.basicConfig(level=logging.INFO, format=FORMAT, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 def load_data(data_file):
+    with open(data_file,"rb") as df:
+        content = pickle.load(df)
 
-    c2i = {'LumA': 1, 'LumB': 0}
+    X1 = content[args.fea1] # n x m1
+    X2 = content[args.fea2] # n x m2
+    Y = content["diagnosis"]
 
-    data = pd.read_pickle(data_file)
-    pathway_df = data['pathway_df']
-    pathway_df['PAM50'] = pathway_df['PAM50'].apply(lambda x: c2i[x])
-    train_idxs = data['train_idxs']
-    test_idxs = data['test_idxs']
+    #Suppress to two classes
+    for i in range(len(Y)):
+        if Y[i] !=0:
+            Y[i] =1
 
-    cols = pathway_df.columns[:-2]
+    y_keys = [-1]+list(set(Y)) #-1 means all data
+    y_ind  = {}
+    y_ind[-1] = range(len(Y))
+    for y_val in set(Y):
+        y_ind[y_val] = [i for i in range(len(Y)) if Y[i] == y_val]
 
-    X_train = pathway_df.loc[train_idxs][cols].values
-    y_train = pathway_df.loc[train_idxs]['PAM50'].values
-    X_test = pathway_df.loc[test_idxs][cols].values
-    y_test = pathway_df.loc[test_idxs]['PAM50'].values
+    #TODO: Cross validation
+    #Split train and val
+    val_ind = content["val_idx"]
+    train_ind = content["train_idx"]
+    X1_train = X1[train_ind]
+    X1_val = X1[val_ind]
+    X2_train = X2[train_ind]
+    X2_val = X2[val_ind]
+    y_train = X1[train_ind]
+    y_val = X1[val_ind]
 
-    # normalize per person
-    means = X_train.mean(1)
-    X_train = X_train/means[:, None]
-    means = X_test.mean(1)
-    X_test = X_test/means[:, None]
+    return (X1_train, X2_train, y_train),(X1_val, X2_val, y_val)
 
-    # scale
-    means = X_train.mean(axis=0)
-    stds = X_train.std(axis=0)
-    X_train = (X_train-means) / stds
-    X_test = (X_test-means) / stds
-
-    return (X_train, y_train), (X_test, y_test)
-
-def get_dataloader(X, y, batch_size, shuffle=True):
-    X_tensor = torch.FloatTensor(X)
+def get_dataloader(X1, X2, y, batch_size, shuffle=True):
+    X1_tensor = torch.FloatTensor(X1)
+    X2_tensor = torch.FloatTensor(X2)
     y_tensor = torch.LongTensor(y)
-    ds = TensorDataset(X_tensor, y_tensor)
+    ds = TensorDataset(X1_tensor, X2_tensor, y_tensor)
     dl = DataLoader(ds, batch_size=batch_size, shuffle=shuffle)
     return dl
 
 def main(args):
 
-    model_alias = 'IBD+%s+%s_%s+%s+%s' % (
+    model_alias = 'DeepBiome_%s+%s_%s+fea1_%s+fea2_%s+bs_%s+%s' % (
         args.model,
-        args.dataset_name, args.dataset_subset,
+        args.dataset_name, args.data_type,
+        args.fea1,args.fea2,
         args.batch_size,
         args.extra)
 
     tl.configure("runs/ds.{}".format(model_alias))
     tl.log_value(model_alias, 0)
 
+    """ no stat file needed for now
     stat_alias = 'obj_DataStat+%s_%s' % (args.dataset_name, args.dataset_subset)
     stat_path = os.path.join(
-        args.output_dir, '%s.pkl' % (stat_alias)
+        output_dir, '%s.pkl' % (stat_alias)
     )
     with open(stat_path,'rb') as sf:
         data_stats = pickle.load(sf)
+    """
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_num
-    data_path = os.path.join(DATA_ROOT, "{}-{}-zComp-clr.csv".format(args.dataset_name, args.dataset_subset))
+
+    data_path = os.path.join(DATA_ROOT, "ibd_{}.pkl".format(args.data_type))
+
 
     logger.info("Initializing train dataset")
 
     # load data
     print('==> loading data'); print()
-    (X_train, y_train), (X_test, y_test) = load_data(data_path)
-    train_loader = get_dataloader(X_train, y_train, args.batch_size)
-    test_loader = get_dataloader(X_test, y_test, args.batch_size)
+    (X1_train, X2_train, y_train), (X1_val, X2_val, y_val) = load_data(data_path)
+    train_loader = get_dataloader (X1_train, X2_train, y_train, args.batch_size)
+    test_loader = get_dataloader(X1_val, X2_val, y_val, args.batch_size)
 
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
@@ -98,18 +107,20 @@ def main(args):
 
     ts = time.time()
 
-    dataset = MNIST(
-        root='data', train=True, transform=transforms.ToTensor(),
-        download=True)
-    data_loader = DataLoader(
-        dataset=dataset, batch_size=args.batch_size, shuffle=True)
-
     def loss_fn(recon_x, x, mean, log_var):
         BCE = torch.nn.functional.binary_cross_entropy(
             recon_x.view(-1, 28*28), x.view(-1, 28*28), reduction='sum')
         KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
 
         return (BCE + KLD) / x.size(0)
+
+    ae = AE(
+        encoder_layer_sizes=args.encoder_layer_sizes,
+        latent_size=args.latent_size,
+        decoder_layer_sizes=args.decoder_layer_sizes,
+        conditional=args.conditional,
+        num_labels=10 if args.conditional else 0).to(device)
+
 
     vae = VAE(
         encoder_layer_sizes=args.encoder_layer_sizes,
@@ -126,7 +137,7 @@ def main(args):
 
         tracker_epoch = defaultdict(lambda: defaultdict(dict))
 
-        for iteration, (x, y) in enumerate(data_loader):
+        for iteration, (x1, x2, y) in enumerate(train_loader):
 
             x, y = x.to(device), y.to(device)
 
@@ -149,9 +160,9 @@ def main(args):
 
             logs['loss'].append(loss.item())
 
-            if iteration % args.print_every == 0 or iteration == len(data_loader)-1:
+            if iteration % args.print_every == 0 or iteration == len(train_loader)-1:
                 print("Epoch {:02d}/{:02d} Batch {:04d}/{:d}, Loss {:9.4f}".format(
-                    epoch, args.epochs, iteration, len(data_loader)-1, loss.item()))
+                    epoch, args.epochs, iteration, len(train_loader)-1, loss.item()))
 
                 if args.conditional:
                     c = torch.arange(0, 10).long().unsqueeze(1)
@@ -196,12 +207,15 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--model", type=str, default='AE')
-    parser.add_argument("--dataset", type=str, default='ibd')
-    parser.add_argument("--data_subset", type=str, default='x2-mic')
+    parser.add_argument("--dataset_name", type=str, default='ibd')
+    parser.add_argument("--data_type", type=str, default='clr', help="clr: log(x) - mean(log(x)), 0-1: log (x/sum(x)))")
+    parser.add_argument("--fea1", type=str, default='met_W_pca')
+    parser.add_argument("--fea2", type=str, default='genus_fea')
+
 
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=10)
     parser.add_argument("--learning_rate", type=float, default=0.001)
     parser.add_argument("--encoder_layer_sizes", type=list, default=[784, 256])
     parser.add_argument("--decoder_layer_sizes", type=list, default=[256, 784])
@@ -209,6 +223,9 @@ if __name__ == '__main__':
     parser.add_argument("--print_every", type=int, default=100)
     parser.add_argument("--fig_root", type=str, default='figs')
     parser.add_argument("--conditional", action='store_true')
+
+    parser.add_argument('--gpu_num', default="0", type=str)
+    parser.add_argument("--extra", type=str, default='')
 
     args = parser.parse_args()
 

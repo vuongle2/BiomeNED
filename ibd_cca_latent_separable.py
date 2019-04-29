@@ -4,7 +4,7 @@ import numpy as np
 import pickle
 import argparse
 import matplotlib.pyplot as plt
-from pyrcca import rcca
+#from pyrcca import rcca
 import logging
 from sklearn import metrics
 #import tensorboard_logger as tl
@@ -19,13 +19,16 @@ logging.basicConfig(level=logging.INFO, format=FORMAT, stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
 def main(args):
-    #data_type = "clr"# log(x) - mean(log(x))
-    data_type = "0-1" #x/sum(x)
-    data_path = os.path.join(DATA_ROOT, "ibd_{}.pkl".format(data_type))
+    data_path = os.path.join(DATA_ROOT, "ibd_{}.pkl".format(args.data_type))
     with open(data_path,"rb") as df:
         content = pickle.load(df)
 
-    model_alias = "dt.%s"%(data_type)
+    model_alias = 'ShallowBiome_%s+%s_%s+fea1_%s+fea2_%s+%s' % (
+        args.model,
+        args.dataset_name, args.data_type,
+        args.fea1,args.fea2,
+        args.extra)
+    print(model_alias)
 
     X1 = content[args.fea1] # n x m1
     X2 = content[args.fea2] # n x m2
@@ -56,7 +59,7 @@ def main(args):
     #X2 = np.random.rand(X2.shape[0], X2.shape[1])
 
 
-    CENTER_AND_SCALE = 1 # normally not because sklearn does it inside cca
+    CENTER_AND_SCALE = 0 # normally not because sklearn does it inside cca
     NUM_PLOT_ROW = 2
     NUM_PLOT_COL = 3
 
@@ -71,23 +74,23 @@ def main(args):
     """
 
     # SVM
-    clf = svm.SVC()
+    clf = svm.SVC(gamma='auto')
     clf.fit(X1_train, y_train)
     y_val_hat_X1 = clf.predict(X1_val)
-    acc_X1 = metrics.accuracy_score(y_val, y_val_hat_X1)
+    acc_X1 = metrics.f1_score(y_val, y_val_hat_X1)
 
     clf.fit(X2_train, y_train)
     y_val_hat_X2 = clf.predict(X2_val)
-    acc_X2 = metrics.accuracy_score(y_val, y_val_hat_X2)
+    acc_X2 = metrics.f1_score(y_val, y_val_hat_X2)
 
     X1_X2_train = np.hstack([X1_train, X2_train])
     X1_X2_val = np.hstack([X1_val, X2_val])
 
     clf.fit(X1_X2_train, y_train)
     y_val_hat_X1_X2 = clf.predict(X1_X2_val)
-    acc_X1_X2 = metrics.accuracy_score(y_val, y_val_hat_X1_X2)
+    acc_X1_X2 = metrics.f1_score(y_val, y_val_hat_X1_X2)
 
-    print("SVM acc, raw:", acc_X1, acc_X2, acc_X1_X2)
+    print("SVM f1, raw:", acc_X1, acc_X2, acc_X1_X2)
     #Train the CCA using some set of data: all, or by y class?
     for count_train_y, each_train_y in enumerate(y_train_keys): # for each class
         #Train
@@ -113,7 +116,7 @@ def main(args):
             x2_val = (x2_val - mu2) / std2
 
         max_n_comp = min(x1_train.shape[1], x2_train.shape[1])
-        n_comp = int(max_n_comp/2)
+        n_comp = int(max_n_comp)
 
         #CCA
         cca12 = CCA(n_components=n_comp)
@@ -141,19 +144,19 @@ def main(args):
 
         clf.fit(X1_c, y_train)
         y_val_hat_X1_c = clf.predict(X1_c_val)
-        acc_X1_c = metrics.accuracy_score(y_val, y_val_hat_X1_c)
+        acc_X1_c = metrics.f1_score(y_val, y_val_hat_X1_c)
 
         clf.fit(X2_c, y_train)
         y_val_hat_X2_c = clf.predict(X2_c_val)
-        acc_X2_c = metrics.accuracy_score(y_val, y_val_hat_X2_c)
+        acc_X2_c = metrics.f1_score(y_val, y_val_hat_X2_c)
 
         X1_X2_c = np.hstack([X1_c,X2_c])
         X1_X2_c_val = np.hstack([X1_c_val, X2_c_val])
         clf.fit(X1_X2_c, y_train)
         y_val_hat_X1_X2_c = clf.predict(X1_X2_c_val)
-        acc_X1_X2_c = metrics.accuracy_score(y_val, y_val_hat_X1_X2_c)
+        acc_X1_X2_c = metrics.f1_score(y_val, y_val_hat_X1_X2_c)
 
-        print("svm acc, CCA trained on Y={}".format(each_train_y), acc_X1_c, acc_X2_c, acc_X1_X2_c)
+        print("svm f1, CCA trained on Y={}".format(each_train_y), acc_X1_c, acc_X2_c, acc_X1_X2_c)
 
         markers = {0:'.',1:'+'}
         colors = {0: 'g', 1: 'r'}
@@ -205,10 +208,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--model", type=str, default='CCA')
-    parser.add_argument("--fea1", type=str, default='met_W')
+    parser.add_argument("--fea1", type=str, default='met_W_pca')
     parser.add_argument("--fea2", type=str, default='genus_fea')
-    parser.add_argument("--dataset", type=str, default='ibd')
-    parser.add_argument("--data_subset", type=str, default='x2-mic')
+    parser.add_argument("--dataset_name", type=str, default='ibd')
+    parser.add_argument("--data_type", type=str, default='clr', help="clr: log(x) - mean(log(x)), 0-1: log (x/sum(x)))")
     parser.add_argument("--extra", type=str, default='')
 
     args = parser.parse_args()
