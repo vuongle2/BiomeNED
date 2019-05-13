@@ -30,12 +30,12 @@ def main(args):
     #met_dr == "NMF":
     #NMF - TODO: better way to make data positive
     met_fea = met_fea - met_fea.min(axis=0)
-    nmf = NMF(n_components=20, init='random', random_state=1)
+    nmf = NMF(n_components=100, init='random', random_state=1)
     met_W_nmf = nmf.fit_transform(met_fea)
     met_H_nmf = nmf.components_
     #met_dr == "PCA":
     #PCA
-    pca = PCA(copy=True, iterated_power='auto', n_components=20, random_state=None,  svd_solver='auto', tol=0.0, whiten=False)
+    pca = PCA(copy=True, iterated_power='auto', n_components=100, random_state=None,  svd_solver='auto', tol=0.0, whiten=False)
     met_W_pca = pca.fit_transform(met_fea)
     met_H_pca = pca.components_
 

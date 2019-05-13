@@ -52,8 +52,8 @@ def load_data(data_file):
     X1_val = X1[val_ind]
     X2_train = X2[train_ind]
     X2_val = X2[val_ind]
-    y_train = X1[train_ind]
-    y_val = X1[val_ind]
+    y_train = Y[train_ind]
+    y_val = Y[val_ind]
 
     return (X1_train, X2_train, y_train),(X1_val, X2_val, y_val)
 
@@ -95,7 +95,7 @@ def main(args):
 
     # load data
     print('==> loading data'); print()
-    (X1_train, X2_train, y_train), (X1_val, X2_val, y_val) = load_data(data_path)
+    (X1_train, X2_train,  y_train), (X1_val, X2_val, y_val) = load_data(data_path)
     train_loader = get_dataloader (X1_train, X2_train, y_train, args.batch_size)
     test_loader = get_dataloader(X1_val, X2_val, y_val, args.batch_size)
 
@@ -107,29 +107,38 @@ def main(args):
 
     ts = time.time()
 
-    def loss_fn(recon_x, x, mean, log_var):
-        BCE = torch.nn.functional.binary_cross_entropy(
-            recon_x.view(-1, 28*28), x.view(-1, 28*28), reduction='sum')
-        KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
+    def loss_fn(model, recon_x, x, mean, log_var):
+        if model =="AE":
+            mseloss = torch.nn.MSELoss()
+            return torch.sqrt(mseloss(recon_x, x))
+        elif model =="VAE":
+            BCE = torch.nn.functional.binary_cross_entropy(
+                recon_x.view(-1, 28*28), x.view(-1, 28*28), reduction='sum')
+            KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
+            return (BCE + KLD) / x.size(0)
 
-        return (BCE + KLD) / x.size(0)
+    if args.model == "AE":
+        predictor = AE(
+            encoder_layer_sizes=[X1_train.shape[1]],
+            latent_size=args.latent_size,
+            decoder_layer_sizes=[X2_train.shape[1]],
+            activation=args.activation,
+            batch_norm= args.batch_norm,
+            dropout=args.dropout,
+            conditional=args.conditional,
+            num_labels=10 if args.conditional else 0).to(device)
+    else:
+        predictor = VAE(
+            encoder_layer_sizes=args.encoder_layer_sizes,
+            latent_size=args.latent_size,
+            decoder_layer_sizes=args.decoder_layer_sizes,
+            activation=args.activation,
+            batch_norm=args.batch_norm,
+            dropout=args.dropout,
+            conditional=args.conditional,
+            num_labels=10 if args.conditional else 0).to(device)
 
-    ae = AE(
-        encoder_layer_sizes=args.encoder_layer_sizes,
-        latent_size=args.latent_size,
-        decoder_layer_sizes=args.decoder_layer_sizes,
-        conditional=args.conditional,
-        num_labels=10 if args.conditional else 0).to(device)
-
-
-    vae = VAE(
-        encoder_layer_sizes=args.encoder_layer_sizes,
-        latent_size=args.latent_size,
-        decoder_layer_sizes=args.decoder_layer_sizes,
-        conditional=args.conditional,
-        num_labels=10 if args.conditional else 0).to(device)
-
-    optimizer = torch.optim.Adam(vae.parameters(), lr=args.learning_rate)
+    optimizer = torch.optim.Adam(predictor.parameters(), lr=args.learning_rate)
 
     logs = defaultdict(list)
 
@@ -139,12 +148,12 @@ def main(args):
 
         for iteration, (x1, x2, y) in enumerate(train_loader):
 
-            x, y = x.to(device), y.to(device)
+            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
 
             if args.conditional:
-                recon_x, mean, log_var, z = vae(x, y)
+                x2_hat, z, mean, log_var = predictor(x1, y)
             else:
-                recon_x, mean, log_var, z = vae(x)
+                x2_hat, z, mean, log_var = predictor(x1)
 
             for i, yi in enumerate(y):
                 id = len(tracker_epoch)
@@ -152,7 +161,7 @@ def main(args):
                 tracker_epoch[id]['y'] = z[i, 1].item()
                 tracker_epoch[id]['label'] = yi.item()
 
-            loss = loss_fn(recon_x, x, mean, log_var)
+            loss = loss_fn(args.model, x2_hat, x2, mean, log_var)
 
             optimizer.zero_grad()
             loss.backward()
@@ -163,13 +172,13 @@ def main(args):
             if iteration % args.print_every == 0 or iteration == len(train_loader)-1:
                 print("Epoch {:02d}/{:02d} Batch {:04d}/{:d}, Loss {:9.4f}".format(
                     epoch, args.epochs, iteration, len(train_loader)-1, loss.item()))
-
-                if args.conditional:
-                    c = torch.arange(0, 10).long().unsqueeze(1)
-                    x = vae.inference(n=c.size(0), c=c)
-                else:
-                    x = vae.inference(n=10)
-
+                if args.model =="VAE":
+                    if args.conditional:
+                        c = torch.arange(0, 10).long().unsqueeze(1)
+                        x = predictor.inference(n=c.size(0), c=c)
+                    else:
+                        x = predictor.inference(n=10)
+                """
                 plt.figure()
                 plt.figure(figsize=(5, 10))
                 for p in range(10):
@@ -192,16 +201,25 @@ def main(args):
                     dpi=300)
                 plt.clf()
                 plt.close('all')
-
+                """
+        #Batch test
+        x1, x2, y = torch.FloatTensor(X1_val).to(device), torch.FloatTensor(X2_val).to(device), torch.FloatTensor(y_val).to(device)
+        if args.conditional:
+            x2_hat, z, mean, log_var = predictor(x1, y)
+        else:
+            x2_hat, z, mean, log_var = predictor(x1)
+        val_loss = loss_fn(args.model, x2_hat, x2, mean, log_var)
+        print("val_loss: {:9.4f}", val_loss.item())
+        """
         df = pd.DataFrame.from_dict(tracker_epoch, orient='index')
         g = sns.lmplot(
-            x='x', y='y', hue='label', data=df.groupby('label').head(100),
+            x='x1', y='x2', hue='label', data=df.groupby('label').head(100),
             fit_reg=False, legend=True)
         g.savefig(os.path.join(
             args.fig_root, str(ts), "E{:d}-Dist.png".format(epoch)),
             dpi=300)
 
-
+        """
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -212,15 +230,15 @@ if __name__ == '__main__':
     parser.add_argument("--fea1", type=str, default='met_W_pca')
     parser.add_argument("--fea2", type=str, default='genus_fea')
 
-
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=10)
-    parser.add_argument("--learning_rate", type=float, default=0.001)
-    parser.add_argument("--encoder_layer_sizes", type=list, default=[784, 256])
-    parser.add_argument("--decoder_layer_sizes", type=list, default=[256, 784])
-    parser.add_argument("--latent_size", type=int, default=2)
-    parser.add_argument("--print_every", type=int, default=100)
+    parser.add_argument("--learning_rate", type=float, default=0.01)
+    parser.add_argument("--activation", type=str, default='ReLU')
+    parser.add_argument('--dropout', default=0, type=float)
+    parser.add_argument('--batch_norm', default=1, type=bool)
+    parser.add_argument("--latent_size", type=int, default=20)
+    parser.add_argument("--print_every", type=int, default=10)
     parser.add_argument("--fig_root", type=str, default='figs')
     parser.add_argument("--conditional", action='store_true')
 
