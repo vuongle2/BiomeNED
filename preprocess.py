@@ -14,19 +14,25 @@ from utils import read_csv_table
 def main(args):
     metabolite_file = "/data/BioHealth/IBD/ibd-x1-met-zComp-{}.csv".format(args.data_type)
     bacteria_file   = "/data/BioHealth/IBD/ibd-x2-mic-zComp-{}.csv".format(args.data_type)
+    metabolite_group_file = "/data/BioHealth/IBD/ibd-x1-met-zComp-grouped-{}.csv".format(args.data_type)
+    bacteria_group_file = "/data/BioHealth/IBD/ibd-x2-mic-zComp-grouped-{}.csv".format(args.data_type)
     bacteria_taxa_file = "/data/BioHealth/IBD/mic-taxa-itis-v2.csv"
     label_file      = "/data/BioHealth/IBD/ibd-y.csv"
     output_file ="/data/BioHealth/IBD/ibd_{}.pkl".format(args.data_type)
 
-    #Process metabolite: NMF
+    #Process metabolite:
     subject_ids, met_ids, met_fea = read_csv_table(metabolite_file)
+    subject_ids, met_group_ids, met_group_fea = read_csv_table(metabolite_group_file)
     met_fea = met_fea.astype(np.float)
+    met_group_fea = met_group_fea.astype(np.float)
     #undo preprocessing:
     #x1 = np.exp(x1) # from log(x)- mean(log(x) to x/(x1*x2*...)^(1/n), centered (product) at 1
 
     if args.data_type == "0-1":
         met_fea = np.log(met_fea)
+        met_group_fea = np.log(met_group_fea)
 
+    """ We do not do dim reduction anymore
     #met_dr == "NMF":
     #NMF - TODO: better way to make data positive
     met_fea = met_fea - met_fea.min(axis=0)
@@ -38,13 +44,17 @@ def main(args):
     pca = PCA(copy=True, iterated_power='auto', n_components=100, random_state=None,  svd_solver='auto', tol=0.0, whiten=False)
     met_W_pca = pca.fit_transform(met_fea)
     met_H_pca = pca.components_
+    """
 
     # Process bacteria
     row_name_bac, bac_ids, bac_fea = read_csv_table(bacteria_file)
-    assert (row_name_bac == subject_ids)
+    row_name_bac_group, bac_group_ids, bac_group_fea = read_csv_table(bacteria_group_file)
+    assert row_name_bac == subject_ids
     bac_fea = bac_fea.astype(np.float)
+    bac_group_fea = bac_group_fea.astype(np.float)
     if args.data_type == "0-1":
         bac_fea = np.log(bac_fea)
+        bac_group_fea = np.log(bac_group_fea)
     bac_taxa = read_csv_table(bacteria_taxa_file,output_dict=True)
     #Get a list of unique genuses
     genuses = set()
@@ -67,7 +77,7 @@ def main(args):
 
     # Process y
     row_name_lab, col_name_lab, labels = read_csv_table(label_file)
-    assert (row_name_bac == subject_ids)
+    assert row_name_bac == subject_ids
     diagnosis = labels[:,1]
     diag_encode = {
         "Control":0,
@@ -89,19 +99,25 @@ def main(args):
     out_data = {
             "subject_ids":subject_ids,
             "met_fea":met_fea,
+            "met_group_fea": met_group_fea,
+            """
             "met_W_nmf":met_W_nmf,
             "met_H_nmf":met_H_nmf,
             "met_W_pca": met_W_pca,
             "met_H_pca": met_H_pca,
+            """
             "bac_ids":bac_ids,
             "bac_fea":bac_fea,
+            "bac_group_fea": bac_group_fea,
             "genuses": genuses,
-            "genus_fea":genus_fea,
+            "bac_genus":genus_fea,
             "train_idx":train_idx,
             "val_idx":val_idx,
             "diagnosis":diagnosis}
     with open(output_file,'wb') as of:
         pickle.dump(out_data, of, protocol=2)
+    print("written %s"%output_file)
+
 
 if __name__ == '__main__':
 

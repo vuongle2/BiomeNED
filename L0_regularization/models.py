@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 class L0MLP(nn.Module):
     def __init__(self, input_dim, num_classes, layer_dims=(300, 100), N=50000, beta_ema=0.999,
-                 weight_decay=1, lambas=(1., 1., 1.), local_rep=False, temperature=2./3.):
+                 weight_decay=1, lambas=(10e-3,), local_rep=False, temperature=2./3.):
         super(L0MLP, self).__init__()
         self.layer_dims = layer_dims
         self.input_dim = input_dim

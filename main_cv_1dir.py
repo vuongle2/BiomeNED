@@ -9,15 +9,12 @@ import matplotlib.pyplot as plt
 from sklearn import metrics
 #import tensorboard_logger as tl
 
-from biome_ae import BiomeAE, BiomeCCA, BiomeAESnip, BiomeLasso, BiomeMultiTaskLasso, BiomeLinear, BiomeOneLayer
+from biome_ae import BiomeAE, BiomeCCA, BiomeAESnip, BiomeLasso, BiomeMultiTaskLasso, BiomeLinear, BiomeOneLayer, BiomeLassoAESnip
 
-from utils import draw_weight_graph, write_matrix_to_csv
+from utils import draw_weight_graph, write_matrix_to_csv, get_subgraph, consistency_index
 
 RANDOM_SEED =1
 DATA_ROOT = "/data/BioHealth/IBD"
-vis_dir = os.path.join(DATA_ROOT, 'vis')
-if not os.path.exists(vis_dir):
-    os.makedirs(vis_dir)
 parser = argparse.ArgumentParser()
 FORMAT = '[%(asctime)s: %(filename)s: %(lineno)4d]: %(message)s'
 #logging.basicConfig(level=logging.INFO, format=FORMAT, stream=sys.stdout)
@@ -36,29 +33,24 @@ def get_parts(x_full, parts, num_parts):
 def init_model(args):
     # Train X1-->X2
     if args.model == "BiomeCCA":
-        model12 = BiomeCCA(args)
-        model21 = BiomeCCA(args)
+        translator = BiomeCCA(args)
     elif args.model == "BiomeLinear":
-        model12 = BiomeLinear(args)
-        model21 = BiomeLinear(args)
+        translator = BiomeLinear(args)
     elif args.model == "BiomeLasso":
-        model12 = BiomeLasso(args)
-        model21 = BiomeLasso(args)
+        translator = BiomeLasso(args)
     elif args.model == "BiomeMultiTaskLasso":
-        model12 = BiomeMultiTaskLasso(args)
-        model21 = BiomeMultiTaskLasso(args)
+        translator = BiomeMultiTaskLasso(args)
     elif args.model in ["BiomeOneLayer"]:
-        model12 = BiomeOneLayer(args)
-        model21 = BiomeOneLayer(args)
+        translator = BiomeOneLayer(args)
     elif args.model in ["BiomeAE", "BiomeAEL0"]:
-        model12 = BiomeAE(args)
-        model21 = BiomeAE(args)
+        translator = BiomeAE(args)
     elif args.model == "BiomeAESnip":
-        model12 = BiomeAESnip(args)
-        model21 = BiomeAESnip(args)
+        translator = BiomeAESnip(args)
+    elif args.model == "BiomeLassoAESnip":
+        translator = BiomeLassoAESnip(args)
     else:
         assert 0, "Unknown model %s" % args.model
-    return (model12, model21)
+    return translator
 def main(args):
     data_type = args.data_type
     data_path = os.path.join(DATA_ROOT, "ibd_{}.pkl".format(data_type))
@@ -66,15 +58,16 @@ def main(args):
         content = pickle.load(df)
 
     extra = ""
-    if args.model in ["BiomeAE", "BiomeAESnip"]: #deep learning model, add deep learning params in alias
-        extra += "bs_%d+ac_%s" %(
-            args.batch_size,
-            args.activation
-        )
     if args.nonneg_weight:
         extra+="+nonneg_weight"
     if args.normalize_input:
         extra += "+normalize_input"
+    if args.model in ["BiomeAE", "BiomeAESnip"]: #deep learning model, add deep learning params in alias
+        extra += "+bs_%d+ac_%s+lr_%s" %(
+            args.batch_size,
+            args.activation,
+            args.learning_rate
+        )
 
     model_alias = 'Translator+%s_%s+%s-%s+cv_%d+%s+sparse_%s+ls_%d+%s' % (
         args.dataset_name, args.data_type,
@@ -83,8 +76,13 @@ def main(args):
         args.model,
         args.sparse, args.latent_size,
         extra + args.extra)
+
     args.model_alias = model_alias
     print(model_alias)
+
+    vis_dir = os.path.join(DATA_ROOT, 'vis', model_alias)
+    if not os.path.exists(vis_dir):
+        os.makedirs(vis_dir)
 
     X1 = content[args.fea1] # n x m1
     X2 = content[args.fea2] # n x m2
@@ -165,37 +163,25 @@ def main(args):
         #Train CCA on all or part?
         x1_train = x1_train_all
         x2_train = x2_train_all
-        mu1 = x1_train.mean(axis=0)
-        mu2 = x2_train.mean(axis=0)
-        std1 = x1_train.std(axis=0, ddof=1)
-        std1[std1 == 0.0] = 1.0
-        std2 = x2_train.std(axis=0, ddof=1)
-        std2[std2 == 0.0] = 1.0
         if (CENTER_AND_SCALE):
-            #Center and Scale
+            mu1 = (x1_train.max(axis=0) + x1_train.min(axis=0))/2.0
             x1_train = x1_train - mu1
-            x2_train = x2_train - mu2
+            std1 = (x1_train.max(axis=0) - x1_train.min(axis=0))/2.0
             x1_train /= std1
+            x1_vals = [(x1_val - mu1) / std1 for x1_val in x1_vals]
+
+            mu2 = (x2_train.max(axis=0) + x2_train.min(axis=0))/2.0
+            x2_train = x2_train - mu2
+            std2 = (x2_train.max(axis=0) - x2_train.min(axis=0))/2.0
             x2_train /= std2
-
-        #Train a pair of models
-        model12, model21 = init_model(args)
-        model12.fit(x1_train,x2_train,y_train, x1_vals[0], x2_vals[0], y_test, args)
-        model21.fit(x2_train, x1_train, y_train, x2_vals[0], x1_vals[0], y_test, args)
-
-        if args.sparse is not None and args.fea1 != "met_fea":
-            graph_fname12 = os.path.join(vis_dir, model_alias+'_model12_fold%d'%fold)
-            nodes12, weights12 = model12.get_graph()
-            graph_fname21 = os.path.join(vis_dir, model_alias+'_model21_fold%d'%fold)
-            nodes21, weights21 = model21.get_graph()
-
-            draw_weight_graph(nodes12, weights12, graph_fname12)
-            draw_weight_graph(nodes21, weights21, graph_fname21)
-
+            x2_vals = [(x2_val - mu2) / std2 for x2_val in x2_vals]
+        #Train
+        translator = init_model(args)
+        translator.fit(x1_train,x2_train,y_train, x1_vals[0], x2_vals[0], y_test, args)
 
 
         if args.model == "CCA":
-            x1_c, x2_c = model12.transform(x1_train, x2_train)
+            x1_c, x2_c = translator.transform(x1_train, x2_train)
             latent_corrs_train_cv = [np.corrcoef(x1_c[:, i], x2_c[:, i])[0, 1] for i in range(x1_c.shape[1])]
         else:
             latent_corrs_train_cv = [0 for i in range(x1_train.shape[1])]
@@ -206,41 +192,36 @@ def main(args):
         test_corrs2_cv = [None for _ in range(len(vals_meanings))]
         latent_corrs_val_cv = [None for _ in range(len(vals_meanings))]
         avg_acc1_cv= [None for _ in range(len(vals_meanings))]
-        avg_acc2_cv = [None for _ in range(len(vals_meanings))]
         for val_ind, (x1_val, x2_val, y_val, meaning) in enumerate(zip(x1_vals, x2_vals, y_vals, vals_meanings)):
-            if (CENTER_AND_SCALE):
-                x1_val = (x1_val - mu1) / std1
-                x2_val = (x2_val - mu2) / std2
-
             # Test correlation: Correlation between org signal and the predicted one
-            x2_val_hat = model12.predict(x1_val, x2_val, y_val, args)
+            x2_val_hat = translator.predict(x1_val, x2_val, y_val, args)
             test_corrs1_cv[val_ind] = np.nan_to_num([np.corrcoef(x2_val_hat[:, i], x2_val[:, i])[0, 1] for i in range(x2_val.shape[1])])
             avg_acc1_cv[val_ind] = np.sqrt(metrics.mean_squared_error(x2_val, x2_val_hat))
 
-            # X2-->X1
-            x1_val_hat = model21.predict(x2_val, x1_val, y_val, args)
-            test_corrs2_cv[val_ind] = np.nan_to_num([np.corrcoef(x1_val_hat[:, i], x1_val[:, i])[0, 1] for i in range(x1_val.shape[1])])
-            avg_acc2_cv[val_ind] = np.sqrt(metrics.mean_squared_error(x1_val, x1_val_hat))
-
             if args.model == "CCA":
                 # Test correlation: Correlation between two transformed vectors into latent space
-                x1_c_val, x2_c_val = model12.transform(x1_val, x2_val)
+                x1_c_val, x2_c_val = translator.transform(x1_val, x2_val)
                 latent_corrs_val_cv[val_ind] = [np.corrcoef(x1_c_val[:, i], x2_c_val[:, i])[0, 1] for i in  range(x1_c_val.shape[1])]
             else:
                 #TODO: write latent get for pytorcgh
                 latent_corrs_val_cv = [0 for i in  range(x1_val.shape[1])]
-            l0_weight_12 = model12.param_l0()
-            l0_weight_21 = model21.param_l0()
+            l0_weight_12 = translator.param_l0()
+
+            if args.draw_graph and args.sparse is not None and args.fea1 !="met_fea":
+                nodes12, weights12 = translator.get_graph()
+                argsort1 = np.argsort(-test_corrs1_cv[val_ind])
+                get_subgraph(nodes12, weights12, list(argsort1[:args.topk].T))
+                graph_fname12 = os.path.join(vis_dir, 'graph_translator_fold%d' % fold)
+                draw_weight_graph(nodes12, weights12, graph_fname12)
 
         CV_results[fold] = {'test_corrs1':test_corrs1_cv,
-                            'test_corrs2': test_corrs2_cv,
                             'avg_acc1':avg_acc1_cv,
-                            'avg_acc2': avg_acc2_cv,
                             'latent_corrs_train': latent_corrs_train_cv,
                             'latent_corrs': latent_corrs_val_cv,
-                            'trans12':model12.get_transformation(),
-                            'trans21': model21.get_transformation()}
-
+                            'trans12':translator.get_transformation(),
+                            'nodes12':nodes12,
+                            'weights12':weights12,
+                            }
 
     #Join the folds
     latent_corrs_train_allfolds = [CV_results[fold]['latent_corrs_train'] for fold in range(num_folds)]
@@ -249,37 +230,6 @@ def main(args):
     for v in range(len(vals_meanings)):
         latent_corrs_allfolds = [CV_results[fold]['latent_corrs'][v] for fold in range(num_folds)]
         latent_corrs[v] = np.array(latent_corrs_allfolds).mean(axis=0)
-
-    # Train a single model on all data
-    mu1 = X1.mean(axis=0)
-    mu2 = X2.mean(axis=0)
-    std1 = X1.std(axis=0, ddof=1)
-    std1[std1 == 0.0] = 1.0
-    std2 = X2.std(axis=0, ddof=1)
-    std2[std2 == 0.0] = 1.0
-    if (CENTER_AND_SCALE):
-        # Center and Scale
-        X1 = X1 - mu1
-        X2 = X2 - mu2
-        X1 /= std1
-        X2 /= std2
-    model12, model21 = init_model(args)
-    model12.fit(X1, X2, Y, X1, X2, Y, args)
-    model21.fit(X1, X2, Y, X1, X2, Y, args)
-
-    if args.model in ["BiomeAE","BiomeAESnip", "BiomeCCA"]: # all the model that has mid layer
-        z12 = model12.transform(X1, X2, Y, args)
-        z21 = model21.transform(X1, X2, Y, args)
-
-        fname21 = os.path.join(vis_dir, model_alias + 'latent21_z.txt')
-        write_matrix_to_csv(z21, fname21)
-        if args.sparse is not None and args.fea1 != "met_fea":
-            nodes12, weights12 = model12.get_graph()
-            nodes21, weights21 = model21.get_graph()
-            fname21 = os.path.join(vis_dir, model_alias + 'latent21_x2_to_z_weight.txt')
-            write_matrix_to_csv(weights21[0], fname21)
-            fname21 = os.path.join(vis_dir, model_alias + 'latent21_z_to_x1_weight.txt')
-            write_matrix_to_csv(weights21[1], fname21)
 
     #Plots
     markers = {0: '.', 1: '+', 2: 'o'}
@@ -298,7 +248,7 @@ def main(args):
 
 
     NUM_PLOT_COL = len(vals_meanings) #cca fit + y_test types
-    NUM_PLOT_ROW = 2 #x1 to x2 and x2 to x1
+    NUM_PLOT_ROW = 1
     if args.visualize =="subplot":
         fig, axes = plt.subplots(nrows=NUM_PLOT_ROW, ncols=NUM_PLOT_COL, figsize=(np.sqrt(2)*12, 1*12))
         fig.suptitle("%s"%model_alias, fontsize=16)
@@ -316,25 +266,15 @@ def main(args):
     # Plot 2..n: VALIDATION DETAILS
     for v, meaning in enumerate(vals_meanings): # for each choice of val selection, we take the mean of the folds
         test_corrs1_allfolds = [CV_results[fold]['test_corrs1'][v] for fold in range(num_folds)]
-        test_corrs2_allfolds = [CV_results[fold]['test_corrs2'][v] for fold in range(num_folds)]
         test_corrs1 = np.array(test_corrs1_allfolds).mean(axis=0)
-        test_corrs2 = np.array(test_corrs2_allfolds).mean(axis=0)
 
         meancc1 = test_corrs1.mean()
         argsort1 = np.argsort(-test_corrs1)  # descending
         sort1 = test_corrs1[argsort1]
         meantopk1 = sort1[:args.topk].mean()
 
-        meancc2 = test_corrs2.mean()
-        argsort2 = np.argsort(-test_corrs2)  # - for descending
-        sort2 = test_corrs2[argsort2]
-        meantopk2 = sort2[:args.topk].mean()
-
         avg_acc1_allfolds = [CV_results[fold]['avg_acc1'][v] for fold in range(num_folds)]
         avg_acc1 = np.array(avg_acc1_allfolds).mean(axis=0)
-        avg_acc2_allfolds = [CV_results[fold]['avg_acc2'][v] for fold in range(num_folds)]
-        avg_acc2 = np.array(avg_acc2_allfolds).mean(axis=0)
-
 
         #first row 1->2
         if args.visualize == "subplot":
@@ -350,44 +290,105 @@ def main(args):
         plt.legend()
         plt.ylim(-1.0, 1.0)
 
-        #2nd row 2->1
-        if args.visualize == "subplot":
-            plt.subplot(NUM_PLOT_ROW, NUM_PLOT_COL, 1 +NUM_PLOT_COL+ v)
+        fname = os.path.join(vis_dir, 'cv_val%s_corcoeff.png'%(meaning))
+        if fname is None:
+            plt.show(block=False)
         else:
-            plt.figure()
+            plt.savefig(fname)
+            plt.close()
 
+        # --join the graph
+        # ----- basically nodes should be the same
         for fold in range(num_folds):
-            plt.plot(np.arange(len(test_corrs2_allfolds[fold])) + 1, test_corrs2_allfolds[fold], marker='x', c=colors[fold], label="fold %s"%(fold))
-        plt.plot(np.arange(len(test_corrs2)) + 1, test_corrs2, marker=markers[val_ind],
-                 c=colors[-1], label="mean cv")
-        plt.title('Y %s, x2->x1 top %d:%3.2f, best %d:%3.2f' % (meaning, args.topk, meantopk2, argsort2[0], sort2[0]))
-        plt.legend()
-        plt.ylim(-1.0, 1.0)
-    # plt.xticks(np.arange(nTicks) + 1)
-    print(model_alias)
-    print("x1-->x2, rmse %4.2f, meancc:%4.2f, cc best %s/%4.2f, top %d:%4.2f, #link %s"%(
-        avg_acc1,
-        meancc1,
-        argsort1[0], sort1[0],
-        args.topk, meantopk1,
-        l0_weight_12,
-    ))
-    print("x2-->x1, rmse %4.2f, meancc:%4.2f, cc best %s/%4.2f, top %d:%4.2f, #link %s"%(
-        avg_acc2,
-        meancc2,
-        argsort2[0], sort2[0],
-        args.topk, meantopk2,
-        l0_weight_21,
-    ))
+            assert (CV_results[fold]['nodes12'] == CV_results[0]['nodes12'])
+        join_nodes = CV_results[0]['nodes12']
 
-    fname = os.path.join(vis_dir, model_alias+'.png')
-    if fname is None:
-        plt.show(block=False)
-    else:
-        plt.savefig(fname)
-        plt.close()
+        # -----we will just join the weights
+        join_weights = []
+        for lay_i in range(len(CV_results[0]['weights12'])):  # each layer
+            all_weights = [CV_results[fold]['weights12'][lay_i] for fold in range(num_folds)]
+            jw = np.zeros(all_weights[0].shape)
+            for i in range(all_weights[0].shape[0]):  # each input node
+                for j in range(all_weights[0].shape[1]):  # each output node
+                    ws = np.array([all_weights[fold][i][j] for fold in range(num_folds)])
+                    # vote on existent
+                    if np.count_nonzero(ws) < num_folds:
+                        jw[i, j] = 0
+                    else:
+                        jw[i, j] = ws.mean()
+            join_weights.append(jw)
 
+        #Measure the stability using the mean of pair-wise consistency index of non negative weights
+        if 0:
+            ci = []
+            for fold1 in range(0, num_folds-1):
+                for fold2 in range(1, num_folds):
+                    ci.append(consistency_index(CV_results[fold1]['weights12'], CV_results[fold2]['weights12']))
+            mean_ci = np.array(ci).mean()
 
+        if args.draw_graph:
+            subnodes, subweights = get_subgraph(join_nodes, join_weights, list(argsort1[:args.topk].T))
+            graph_fname = os.path.join(vis_dir, 'joint_graph_top%d' % args.topk)
+            draw_weight_graph(subnodes, subweights, graph_fname)
+
+        #FINAL MODEL
+        # Train a single model on all data
+        if (CENTER_AND_SCALE):
+            # Center and Scale
+            mu1 = (X1.max(axis=0) + X1.min(axis=0))/2.0
+            X1 = X1 - mu1
+            std1 = (X1.max(axis=0) - X1.min(axis=0))/2.0
+            X1 /= std1
+
+            mu2 = (X2.max(axis=0) + X2.min(axis=0)) / 2.0
+            X2 = X2 - mu2
+            std2 = (X2.max(axis=0) - X2.min(axis=0)) / 2.0
+            X2 /= std2
+        translator.fit(X1, X2, Y, X1, X2, Y, args)
+
+        nodes, weights = translator.get_graph()
+        if args.model in ["BiomeAE", "BiomeAESnip","CCA"]:
+            z = translator.transform(X1, X2, Y, args)
+            write_matrix_to_csv(z, os.path.join(vis_dir, 'latent_z.txt'))
+            write_matrix_to_csv(weights[0], os.path.join(vis_dir, 'x1_to_z_weight.txt'))
+            write_matrix_to_csv(weights[1], os.path.join(vis_dir, 'z_to_x2_weight.txt'))
+
+        X2_hat = translator.predict(X1, X2, Y, args)
+        test_corrs = np.nan_to_num(
+            [np.corrcoef(X2_hat[:, i], X2[:, i])[0, 1] for i in range(X2.shape[1])])
+        argsort = np.argsort(-test_corrs)  # descending
+        sort = test_corrs[argsort]
+        avg_acc = np.sqrt(metrics.mean_squared_error(X2, X2_hat))
+        meancc = test_corrs.mean()
+        meantopk = sort[:args.topk].mean()
+        l0_weight = translator.param_l0()
+
+        if args.draw_graph:
+            subnodes, subweights = get_subgraph(nodes, weights, list(argsort[:args.topk].T))
+            graph_fname = os.path.join(vis_dir, 'graph_top%d' % args.topk)
+            draw_weight_graph(subnodes, subweights, graph_fname)
+
+        print(model_alias, meaning)
+        print("CV %s-->%s, rmse %4.2f, meancc:%4.2f, cc best %s/%4.2f, top %d:%4.2f, #link %s \n top10:%s"%(
+            args.fea1,
+            args.fea2,
+            avg_acc1,
+            meancc1,
+            argsort1[0], sort1[0],
+            args.topk, meantopk1,
+            l0_weight_12,
+            ", ".join(["%d:%4.2f"%(k,a) for k,a in zip(argsort1[:args.topk],sort1[:args.topk])])
+        ))
+        print("All %s-->%s, rmse %4.2f, meancc:%4.2f, cc best %s/%4.2f, top %d:%4.2f, #link %s \n top10:%s"%(
+            args.fea1,
+            args.fea2,
+            avg_acc,
+            meancc,
+            argsort[0], sort[0],
+            args.topk, meantopk,
+            l0_weight,
+            ", ".join(["%d:%4.2f"%(k,a) for k,a in zip(argsort[:args.topk],sort[:args.topk])])
+        ))
     #
     pass
 if __name__ == '__main__':
@@ -395,10 +396,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--model", type=str, default='BiomeAE')
-    parser.add_argument("--fea1", type=str, default='met_fea')
-    parser.add_argument("--fea2", type=str, default='bac_fea')
+    parser.add_argument("--fea1", type=str, default='bac_fea')
+    parser.add_argument("--fea2", type=str, default='met_fea')
     parser.add_argument("--dataset_name", type=str, default='ibd')
-    parser.add_argument("--data_type", type=str, default='0-1', help="clr: log(x) - mean(log(x)), 0-1: log (x/sum(x)))")
+    parser.add_argument("--data_type", type=str, default='clr', help="clr: log(x) - mean(log(x)), 0-1: x/sum(x)")
     parser.add_argument("--cross_val_folds", type=int, default=5)
     parser.add_argument("--topk", type=int, default=10)
 
@@ -406,8 +407,8 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=20)
-    parser.add_argument("--learning_rate", type=float, default=0.01)
-    parser.add_argument("--activation", type=str, default="tanh")
+    parser.add_argument("--learning_rate", type=float, default=0.1)
+    parser.add_argument("--activation", type=str, default="tanh_None")
     parser.add_argument('--dropout', default=0, type=float)
     parser.add_argument('--batch_norm', default=1, type=bool)
     parser.add_argument("--latent_size", type=int, default=20)
@@ -421,7 +422,7 @@ if __name__ == '__main__':
     parser.add_argument("--extra", type=str, default='')
 
     parser.add_argument("--visualize", type=str, default='subplot')
-
+    parser.add_argument("--draw_graph", action='store_true')
     args = parser.parse_args()
 
     main(args)

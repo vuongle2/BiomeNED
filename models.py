@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+import numpy as np
 from L0_regularization.models import L0MLP
 from utils import idx2onehot
 
@@ -11,10 +11,19 @@ def make_mlp(type, dim_list, activation=None, batch_norm=True, dropout=0, N=200)
             layers.append(nn.Linear(dim_in, dim_out))
             if batch_norm:
                 layers.append(nn.BatchNorm1d(dim_out))
+
             if activation == 'relu':
                 layers.append(nn.ReLU())
             elif activation == 'leakyrelu':
                 layers.append(nn.LeakyReLU())
+            elif activation == 'tanh':
+                layers.append(nn.Tanh())
+            elif activation == 'sigmoid':
+                layers.append(nn.Sigmoid())
+            elif activation is None:
+                pass
+            else:
+                assert(0,"Unknown activation %s"%activation)
             if dropout > 0:
                 layers.append(nn.Dropout(p=dropout))
         return nn.Sequential(*layers)
@@ -22,7 +31,7 @@ def make_mlp(type, dim_list, activation=None, batch_norm=True, dropout=0, N=200)
         l0mlp = L0MLP(dim_list[0], dim_list[-1], layer_dims=dim_list[1:-1],N=N)
         return l0mlp
     else:
-        assert (0, "unknown mlp type=%s"%type)
+        assert 0, "unknown mlp type=%s"%type
 
 
 class VAE(nn.Module):
@@ -88,10 +97,12 @@ class AE(nn.Module):
 
         self.latent_size = latent_size
 
+        encoder_activation = activation.split("_")[0]
+        decoder_activation = activation.split("_")[1]
         self.encoder = Encoder(
-            encoder_layer_sizes, latent_size, activation, batch_norm, dropout, conditional, num_labels, mlp_type=mlp_type)
+            encoder_layer_sizes, latent_size, encoder_activation, batch_norm, dropout, conditional, num_labels, mlp_type=mlp_type)
         self.decoder = Decoder(
-            decoder_layer_sizes, latent_size, activation, batch_norm, dropout, conditional, num_labels, mlp_type=mlp_type)
+            decoder_layer_sizes, latent_size, decoder_activation, batch_norm, dropout, conditional, num_labels, mlp_type=mlp_type)
 
     def forward(self, x, c=None):
 
@@ -114,9 +125,41 @@ class AE(nn.Module):
         recon_x = self.decoder(z, c)
 
         return recon_x
+
     def param_l0(self):
         return {"Encoder":self.encoder.param_l0(),
                 "Decoder":self.decoder.param_l0(),}
+
+    def regularization(self):
+        #NOTE: Weighting encoder/decoder here
+        return self.encoder.regularization() + self.decoder.regularization()
+
+    def get_influence_matrix(self):
+        return np.multiply(self.encoder.get_influence_matrix(),self.decoder.get_influence_matrix())
+
+class MLPerceptron(nn.Module):
+    def __init__(self, layer_sizes, activation, batch_norm, dropout, mlp_type=None):
+        super().__init__()
+        self.mlp_type = mlp_type
+        self.layer_sizes = layer_sizes
+        self.MLP = make_mlp(
+                mlp_type,
+                layer_sizes,
+                activation=activation,
+                batch_norm=batch_norm,
+                dropout=dropout,
+            )
+    def forward(self, x, c=None):
+        return self.MLP(x)
+
+    def param_l0(self):
+        #Count all non-zeros param
+        nonzero_count = 0
+        for layer in self.modules():
+            if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
+                nonzero_count +=(layer.weight!=0.0).sum().item()
+        return nonzero_count
+
 class Encoder(nn.Module):
 
     def __init__(self, layer_sizes, latent_size, activation, batch_norm, dropout,  conditional, num_labels, mlp_type=None):
@@ -156,6 +199,21 @@ class Encoder(nn.Module):
                 if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
                     nonzero_count +=(layer.weight!=0.0).sum().item()
             return nonzero_count
+    def regularization(self):
+        return self.MLP.regularization()
+
+    def get_influence_matrix(self):
+        """
+        :return: binary matrix showing influence of input to output
+        """
+        m = None
+        for layer in self.modules():
+            if isinstance(layer, nn.Linear):
+                if m is None:
+                    m = np.find(layer.weight)
+                else:
+                    m = m* np.find(layer.weight)
+        return m
 
 class Decoder(nn.Module):
 
@@ -201,3 +259,19 @@ class Decoder(nn.Module):
                 if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.Linear):
                     nonzero_count +=(layer.weight!=0.0).sum().item()
             return nonzero_count
+
+    def regularization(self):
+        return self.MLP.regularization()
+
+    def get_influence_matrix(self):
+        """
+        :return: binary matrix showing influence of input to output
+        """
+        m = None
+        for layer in self.modules():
+            if isinstance(layer, nn.Linear):
+                if m is None:
+                    m = np.find(layer.weight)
+                else:
+                    m = m* np.find(layer.weight)
+        return m

@@ -2,6 +2,72 @@
 import pickle
 import csv
 import numpy as np
+from graphviz import Digraph
+import matplotlib.pyplot as plt
+import csv
+
+def write_matrix_to_csv(a, fn):
+    with open(fn, 'w', newline='') as csvfile:
+        thiswriter = csv.writer(csvfile, delimiter=' ',
+                                quotechar='|', quoting=csv.QUOTE_MINIMAL)
+        for ra in a:
+            thiswriter.writerow(ra)
+def consistency_index(w1, w2, threshold = 0.0):
+    """
+    w1 and w2 are two matrix
+    :param w1:
+    :param w2:
+    :return: iou
+    """
+    #convert to binary
+    bw1 = np.find(w1.abs() >threshold)
+    bw2 = np.find(w2.abs() > threshold)
+    i = np.multiply(bw1,bw2) #intersection
+    o = np.find(bw1+bw2) #union
+    return np.count_nonzero(i)/float(np.count_nonzero(o)) #iou
+
+def get_subgraph(nodes, weights, kept_final_node):
+    # Get the subgraph of topk
+    subnodes = [[] for _ in range(len(nodes))]
+    subweights = [[] for _ in range(len(weights))]
+    subnodes[-1] = kept_final_node  # argsort is index of best nodes, not names
+    for lay_i in range(len(nodes) - 2, -1, -1):  # each layer before the last
+        layer_weight = weights[lay_i]
+        kept_source_nodes = []
+        for node_i_s in range(len(nodes[lay_i])):  # each source node
+            for node_i_d in range(len(nodes[lay_i + 1])):  # each destination node
+                if node_i_d in subnodes[lay_i + 1] and layer_weight[node_i_s, node_i_d] != 0:  # keep the node
+                    kept_source_nodes.append(node_i_s)
+        kept_source_nodes = sorted(list(set(kept_source_nodes)))  # unique, sorted
+        assert (len(kept_source_nodes) != 0, "no node left")
+        subnodes[lay_i] = [nodes[lay_i][node_i] for node_i in kept_source_nodes]
+        subweights[lay_i] = layer_weight[np.array(subnodes[lay_i])[:, None], np.array(subnodes[lay_i + 1])]
+    return (subnodes, subweights)
+
+def draw_weight_graph(node_names, link_weights, file_name):
+    """
+    Draw a graph of weights of a feed forward model
+    :param node_names: list of layers x nodes of each layer
+    :param link_weights: list (layers-1) of 2d numpy array for weights of each links
+    :param file_name: write to
+    :return:
+    """
+    u = Digraph(file_name.split('/')[-1], graph_attr={'nodesep': '1','ranksep': '5'})
+    for l, layer in enumerate(node_names):
+        for n, node_name in enumerate(layer):
+            u.node("%d_%d"%(l,n), label=str(node_name), color='lightblue2')
+
+    for l, layer_weights in enumerate(link_weights):
+        maxw = np.max(np.abs(layer_weights))
+        minw = np.min(np.abs(layer_weights))
+        for b, bn in enumerate(node_names[l]):
+            for e, en in enumerate(node_names[l+1]):
+                w = layer_weights[b,e]
+                if w!=0.0:
+                    intensity = int((abs(w)-minw)/maxw *100)# range from 1 -100
+                    u.edge("%d_%d"%(l,b), "%d_%d"%(l+1,e), color="Gray%d"%(intensity), arrowhead=None, arrowtail=None)
+
+    u.render(filename=file_name,format='png')
 
 
 def read_csv_table(filename, output_dict=False):
