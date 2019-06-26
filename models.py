@@ -20,10 +20,10 @@ def make_mlp(type, dim_list, activation=None, batch_norm=True, dropout=0, N=200)
                 layers.append(nn.Tanh())
             elif activation == 'sigmoid':
                 layers.append(nn.Sigmoid())
-            elif activation is None:
+            elif activation in [None,'None']:
                 pass
             else:
-                assert(0,"Unknown activation %s"%activation)
+                assert 0,"Unknown activation %s"%activation
             if dropout > 0:
                 layers.append(nn.Dropout(p=dropout))
         return nn.Sequential(*layers)
@@ -105,25 +105,16 @@ class AE(nn.Module):
             decoder_layer_sizes, latent_size, decoder_activation, batch_norm, dropout, conditional, num_labels, mlp_type=mlp_type)
 
     def forward(self, x, c=None):
-
         if x.dim() > 2:
             x = x.view(-1, 28*28)
-
-        batch_size = x.size(0)
-
         z = self.encoder(x, c)
-
         recon_x = self.decoder(z, c)
-
         return recon_x,  z, None, None
 
     def inference(self, n=1, c=None):
-
         batch_size = n
         z = torch.randn([batch_size, self.latent_size]).cuda()
-
         recon_x = self.decoder(z, c)
-
         return recon_x
 
     def param_l0(self):
@@ -239,7 +230,7 @@ class Decoder(nn.Module):
                 dropout=dropout
             )
 
-    def forward(self, z, c):
+    def forward(self, z, c=None):
 
         if self.conditional:
             c = idx2onehot(c, n=10).cuda()

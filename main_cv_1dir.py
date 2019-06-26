@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 from sklearn import metrics
 #import tensorboard_logger as tl
 
-from biome_ae import BiomeAE, BiomeCCA, BiomeAESnip, BiomeLasso, BiomeMultiTaskLasso, BiomeLinear, BiomeOneLayer, BiomeLassoAESnip
+from biome_ae import BiomeAE, BiomeCCA, BiomeAESnip, BiomeLasso, BiomeMultiTaskLasso, BiomeLinear, BiomeOneLayerSnip, BiomeLassoAESnip
 
-from utils import draw_weight_graph, write_matrix_to_csv, get_subgraph, consistency_index
+from utils import draw_weight_graph, write_matrix_to_csv, get_subgraph, consistency_index,prune_subgraph
 
 RANDOM_SEED =1
 DATA_ROOT = "/data/BioHealth/IBD"
@@ -40,8 +40,8 @@ def init_model(args):
         translator = BiomeLasso(args)
     elif args.model == "BiomeMultiTaskLasso":
         translator = BiomeMultiTaskLasso(args)
-    elif args.model in ["BiomeOneLayer"]:
-        translator = BiomeOneLayer(args)
+    elif args.model in ["BiomeOneLayerSnip"]:
+        translator = BiomeOneLayerSnip(args)
     elif args.model in ["BiomeAE", "BiomeAEL0"]:
         translator = BiomeAE(args)
     elif args.model == "BiomeAESnip":
@@ -83,9 +83,13 @@ def main(args):
     vis_dir = os.path.join(DATA_ROOT, 'vis', model_alias)
     if not os.path.exists(vis_dir):
         os.makedirs(vis_dir)
+    args.vis_dir = vis_dir
 
     X1 = content[args.fea1] # n x m1
     X2 = content[args.fea2] # n x m2
+    Name1 = content[args.fea1.replace("fea","ids")]
+    Name2 = content[args.fea2.replace("fea","ids")]
+
     # X1 = np.random.rand(X1.shape[0], X1.shape[1])
     # X2 = np.random.rand(X2.shape[0], X2.shape[1])
     Y = content["diagnosis"]
@@ -121,7 +125,6 @@ def main(args):
         CENTER_AND_SCALE = 1 # so that the lL0 weight makes unique sense
     else:
         CENTER_AND_SCALE = 0  # normally not because sklearn does it inside cca
-
 
 
     #Cross validation, we will see if the reconstruction ability is consistent in the data
@@ -176,6 +179,7 @@ def main(args):
             x2_train /= std2
             x2_vals = [(x2_val - mu2) / std2 for x2_val in x2_vals]
         #Train
+        args.contr = fold
         translator = init_model(args)
         translator.fit(x1_train,x2_train,y_train, x1_vals[0], x2_vals[0], y_test, args)
 
@@ -207,12 +211,12 @@ def main(args):
                 latent_corrs_val_cv = [0 for i in  range(x1_val.shape[1])]
             l0_weight_12 = translator.param_l0()
 
+            nodes12, weights12 = translator.get_graph()
+            argsort1 = np.argsort(-test_corrs1_cv[val_ind])
             if args.draw_graph and args.sparse is not None and args.fea1 !="met_fea":
-                nodes12, weights12 = translator.get_graph()
-                argsort1 = np.argsort(-test_corrs1_cv[val_ind])
-                get_subgraph(nodes12, weights12, list(argsort1[:args.topk].T))
+                prunedn12, prunedw12 = prune_subgraph(nodes12, weights12, list(argsort1[:args.topk].T))
                 graph_fname12 = os.path.join(vis_dir, 'graph_translator_fold%d' % fold)
-                draw_weight_graph(nodes12, weights12, graph_fname12)
+                draw_weight_graph(prunedn12, prunedw12, graph_fname12)
 
         CV_results[fold] = {'test_corrs1':test_corrs1_cv,
                             'avg_acc1':avg_acc1_cv,
@@ -319,17 +323,24 @@ def main(args):
             join_weights.append(jw)
 
         #Measure the stability using the mean of pair-wise consistency index of non negative weights
-        if 0:
+        if 1:
             ci = []
             for fold1 in range(0, num_folds-1):
-                for fold2 in range(1, num_folds):
+                for fold2 in range(fold1+1, num_folds):
                     ci.append(consistency_index(CV_results[fold1]['weights12'], CV_results[fold2]['weights12']))
             mean_ci = np.array(ci).mean()
 
         if args.draw_graph:
-            subnodes, subweights = get_subgraph(join_nodes, join_weights, list(argsort1[:args.topk].T))
-            graph_fname = os.path.join(vis_dir, 'joint_graph_top%d' % args.topk)
-            draw_weight_graph(subnodes, subweights, graph_fname)
+            # Now prune more for interpretation
+            LINK_THRESHOLD = 0.1
+            # --prune all the weights that are less important than 0.1
+            for lay_i in range(len(join_weights)):  # each layer
+                lay_w = join_weights[lay_i]
+                lay_w[lay_w < LINK_THRESHOLD] = 0.0
+            # --prune all the nodes that are not connected to the destination
+            subnodes, subweights = prune_subgraph(join_nodes, join_weights, list(argsort1[:args.topk].T))
+            graph_fname = os.path.join(vis_dir, 'joint_graph_top_%d_thresh%s_pruned' % (args.topk,LINK_THRESHOLD))
+            draw_weight_graph(subnodes, subweights, graph_fname, Name1, Name2)
 
         #FINAL MODEL
         # Train a single model on all data
@@ -364,14 +375,19 @@ def main(args):
         l0_weight = translator.param_l0()
 
         if args.draw_graph:
-            subnodes, subweights = get_subgraph(nodes, weights, list(argsort[:args.topk].T))
+            # --prune all the weights that are less important than 0.1
+            for lay_i in range(len(weights)):  # each layer
+                lay_w = join_weights[lay_i]
+                lay_w[lay_w < LINK_THRESHOLD] = 0.0
+            subnodes, subweights = prune_subgraph(nodes, weights, list(argsort[:args.topk].T))
             graph_fname = os.path.join(vis_dir, 'graph_top%d' % args.topk)
-            draw_weight_graph(subnodes, subweights, graph_fname)
+            draw_weight_graph(subnodes, subweights, graph_fname, Name1, Name2)
 
         print(model_alias, meaning)
-        print("CV %s-->%s, rmse %4.2f, meancc:%4.2f, cc best %s/%4.2f, top %d:%4.2f, #link %s \n top10:%s"%(
+        print("CV %s-->%s, ci %4.2f rmse %4.2f, meancc:%4.2f, cc best %s/%4.2f, top %d:%4.2f, #link %s \n top10:%s"%(
             args.fea1,
             args.fea2,
+            mean_ci,
             avg_acc1,
             meancc1,
             argsort1[0], sort1[0],
@@ -396,7 +412,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--model", type=str, default='BiomeAE')
-    parser.add_argument("--fea1", type=str, default='bac_fea')
+    parser.add_argument("--fea1", type=str, default='bac_group_fea')
     parser.add_argument("--fea2", type=str, default='met_fea')
     parser.add_argument("--dataset_name", type=str, default='ibd')
     parser.add_argument("--data_type", type=str, default='clr', help="clr: log(x) - mean(log(x)), 0-1: x/sum(x)")

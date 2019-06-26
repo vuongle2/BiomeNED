@@ -55,6 +55,8 @@ def main(args):
     if args.data_type == "0-1":
         bac_fea = np.log(bac_fea)
         bac_group_fea = np.log(bac_group_fea)
+
+    # Grouping bac myself
     bac_taxa = read_csv_table(bacteria_taxa_file,output_dict=True)
     #Get a list of unique genuses
     genuses = set()
@@ -98,19 +100,14 @@ def main(args):
 
     out_data = {
             "subject_ids":subject_ids,
+            "met_ids": met_ids,
+            "met_group_ids": met_group_ids,
             "met_fea":met_fea,
             "met_group_fea": met_group_fea,
-            """
-            "met_W_nmf":met_W_nmf,
-            "met_H_nmf":met_H_nmf,
-            "met_W_pca": met_W_pca,
-            "met_H_pca": met_H_pca,
-            """
             "bac_ids":bac_ids,
+            "bac_group_ids": bac_group_ids,
             "bac_fea":bac_fea,
             "bac_group_fea": bac_group_fea,
-            "genuses": genuses,
-            "bac_genus":genus_fea,
             "train_idx":train_idx,
             "val_idx":val_idx,
             "diagnosis":diagnosis}

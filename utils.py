@@ -14,37 +14,90 @@ def write_matrix_to_csv(a, fn):
             thiswriter.writerow(ra)
 def consistency_index(w1, w2, threshold = 0.0):
     """
-    w1 and w2 are two matrix
+    w1 and w2 are two matrix or two list of a matrix
     :param w1:
     :param w2:
     :return: iou
     """
+    if isinstance(w1, list) and isinstance(w2,list):
+        if (len(w1)) == 0 and (len(w2)) == 0:
+            return 1
+        fw1 = []
+        fw2 = []
+        for ew1, ew2 in zip(w1,w2):
+           fw1.append(ew1.flatten())
+           fw2.append(ew2.flatten())
+
+        w1 = np.hstack(fw1)
+        w2 = np.hstack(fw2)
     #convert to binary
-    bw1 = np.find(w1.abs() >threshold)
-    bw2 = np.find(w2.abs() > threshold)
+    bw1 = np.absolute(w1) >threshold
+    bw2 = np.absolute(w2) > threshold
     i = np.multiply(bw1,bw2) #intersection
-    o = np.find(bw1+bw2) #union
+    o = np.where(bw1+bw2) #union
     return np.count_nonzero(i)/float(np.count_nonzero(o)) #iou
 
-def get_subgraph(nodes, weights, kept_final_node):
-    # Get the subgraph of topk
+def get_subgraph(nodes, weights, kept_final_node = None):
+    # Get the subgraph of some final node, prune out the parts that are not interested,
+    # including middle nodes that are not connected to either end
+    if kept_final_node is None:
+        kept_final_node = list(range(len(nodes[-1])))
+
     subnodes = [[] for _ in range(len(nodes))]
     subweights = [[] for _ in range(len(weights))]
-    subnodes[-1] = kept_final_node  # argsort is index of best nodes, not names
+    subnodes[-1] = [nodes[-1][node_i] for node_i in kept_final_node] # argsort is index of best nodes, not names
+
+    kept_dest_nodes = kept_final_node
+    #bottom up prune: anything does not connect to needed final
     for lay_i in range(len(nodes) - 2, -1, -1):  # each layer before the last
         layer_weight = weights[lay_i]
         kept_source_nodes = []
+
         for node_i_s in range(len(nodes[lay_i])):  # each source node
-            for node_i_d in range(len(nodes[lay_i + 1])):  # each destination node
-                if node_i_d in subnodes[lay_i + 1] and layer_weight[node_i_s, node_i_d] != 0:  # keep the node
+            if np.count_nonzero(layer_weight[node_i_s, kept_dest_nodes]) >0:  # keep the node
                     kept_source_nodes.append(node_i_s)
         kept_source_nodes = sorted(list(set(kept_source_nodes)))  # unique, sorted
-        assert (len(kept_source_nodes) != 0, "no node left")
+        assert len(kept_source_nodes) != 0, "no node left"
+        #transfer name
         subnodes[lay_i] = [nodes[lay_i][node_i] for node_i in kept_source_nodes]
-        subweights[lay_i] = layer_weight[np.array(subnodes[lay_i])[:, None], np.array(subnodes[lay_i + 1])]
+        subweights[lay_i] = layer_weight[np.array(kept_source_nodes)[:, None], np.array(kept_dest_nodes)]
+        kept_dest_nodes = kept_source_nodes
+    """ the other direction should be done through flipping graph
+    subsubnodes = [[] for _ in range(len(subnodes))]
+    subsubweights = [[] for _ in range(len(subweights))]
+
+    subsubnodes[0] = subnodes[0] #top layer stays
+    kept_source_nodes = list(range(len(subnodes[0])))
+    #top down: some may still connect the final but loss connection to beginning, therefore unwanted
+    for lay_i in range(1, len(nodes)):  # each layer after the first
+        layer_weight = subweights[lay_i]
+        kept_dest_nodes = []
+        for node_i_d in range(len(subnodes[lay_i])):  # each dest node
+            for node_i_s in range(len(subnodes[lay_i -1])):  # each source node
+                if node_i_s in kept_source_nodes and layer_weight[node_i_s, node_i_d] != 0:  # keep the node
+                    kept_dest_nodes.append(node_i_d)
+        kept_dest_nodes = sorted(list(set(kept_dest_nodes)))  # unique, sorted
+        assert (len(kept_dest_nodes) != 0, "no node left")
+        #transfer name
+        subsubnodes[lay_i] = [subnodes[lay_i][node_i] for node_i in kept_dest_nodes]
+        subsubweights[lay_i] = layer_weight[np.array(kept_source_nodes)[:, None], np.array(kept_dest_nodes)]
+        kept_source_nodes = kept_dest_nodes
+    """
     return (subnodes, subweights)
 
-def draw_weight_graph(node_names, link_weights, file_name):
+def prune_subgraph(nodes, weights, kept_final_node):
+    bot_up_nodes, bot_up_weights = get_subgraph(nodes, weights, kept_final_node)
+    bot_up_flip_nodes, bot_up_flip_weights = flip_graph(bot_up_nodes, bot_up_weights)
+    top_down_flip_nodes, top_down_flip_weights = get_subgraph(bot_up_flip_nodes, bot_up_flip_weights)
+    top_down_nodes, top_down_weights = flip_graph(top_down_flip_nodes, top_down_flip_weights)
+    return (top_down_nodes, top_down_weights)
+
+def flip_graph(nodes, weights):
+    flip_nodes = [nodes[layer] for layer in range(len(nodes)-1, -1, -1)]
+    flip_weights = [weights[layer].T for layer in range(len(weights) - 1, -1, -1)]
+    return (flip_nodes, flip_weights)
+
+def draw_weight_graph(node_names, link_weights, file_name, Name1 = None, Name2= None):
     """
     Draw a graph of weights of a feed forward model
     :param node_names: list of layers x nodes of each layer
@@ -52,9 +105,13 @@ def draw_weight_graph(node_names, link_weights, file_name):
     :param file_name: write to
     :return:
     """
-    u = Digraph(file_name.split('/')[-1], graph_attr={'nodesep': '1','ranksep': '5'})
+    u = Digraph(file_name.split('/')[-1], graph_attr={'nodesep': '0.5','ranksep': '5', 'rankdir':'LR'})
     for l, layer in enumerate(node_names):
         for n, node_name in enumerate(layer):
+            if l == 0 and Name1 is not None:
+                node_name = Name1[int(node_name)]
+            if l == len(node_names)-1 and Name2 is not None:
+                node_name = Name2[int(node_name)]
             u.node("%d_%d"%(l,n), label=str(node_name), color='lightblue2')
 
     for l, layer_weights in enumerate(link_weights):
@@ -64,7 +121,7 @@ def draw_weight_graph(node_names, link_weights, file_name):
             for e, en in enumerate(node_names[l+1]):
                 w = layer_weights[b,e]
                 if w!=0.0:
-                    intensity = int((abs(w)-minw)/maxw *100)# range from 1 -100
+                    intensity = int((abs(w)-minw)/maxw *50)# range from 1 -100
                     u.edge("%d_%d"%(l,b), "%d_%d"%(l+1,e), color="Gray%d"%(intensity), arrowhead=None, arrowtail=None)
 
     u.render(filename=file_name,format='png')
