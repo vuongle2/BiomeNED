@@ -14,12 +14,8 @@ from biome_ae import BiomeAE, BiomeCCA, BiomeAESnip, BiomeLasso, BiomeMultiTaskL
 from utils import draw_weight_graph, write_matrix_to_csv, get_subgraph, consistency_index,prune_subgraph
 
 RANDOM_SEED =1
-DATA_ROOT = "/data/BioHealth/IBD"
 parser = argparse.ArgumentParser()
 FORMAT = '[%(asctime)s: %(filename)s: %(lineno)4d]: %(message)s'
-#logging.basicConfig(level=logging.INFO, format=FORMAT, stream=sys.stdout)
-#logger = logging.getLogger(__name__)
-
 
 def get_parts(x_full, parts, num_parts):
     this_part = []
@@ -52,6 +48,7 @@ def init_model(args):
         assert 0, "Unknown model %s" % args.model
     return translator
 def main(args):
+    DATA_ROOT=args.data_root
     data_type = args.data_type
     data_path = os.path.join(DATA_ROOT, "ibd_{}.pkl".format(data_type))
     with open(data_path,"rb") as df:
@@ -216,7 +213,9 @@ def main(args):
             if args.draw_graph and args.sparse is not None and args.fea1 !="met_fea":
                 prunedn12, prunedw12 = prune_subgraph(nodes12, weights12, list(argsort1[:args.topk].T))
                 graph_fname12 = os.path.join(vis_dir, 'graph_translator_fold%d' % fold)
-                draw_weight_graph(prunedn12, prunedw12, graph_fname12)
+                draw_weight_graph(prunedn12, prunedw12, graph_fname12,
+                                  Name1, Name2,
+                                  content["bac_group_DA"], content["met_group_DA"], content["z_DA"])
 
         CV_results[fold] = {'test_corrs1':test_corrs1_cv,
                             'avg_acc1':avg_acc1_cv,
@@ -332,15 +331,15 @@ def main(args):
 
         if args.draw_graph:
             # Now prune more for interpretation
-            LINK_THRESHOLD = 0.1
-            # --prune all the weights that are less important than 0.1
-            for lay_i in range(len(join_weights)):  # each layer
-                lay_w = join_weights[lay_i]
-                lay_w[lay_w < LINK_THRESHOLD] = 0.0
-            # --prune all the nodes that are not connected to the destination
-            subnodes, subweights = prune_subgraph(join_nodes, join_weights, list(argsort1[:args.topk].T))
-            graph_fname = os.path.join(vis_dir, 'joint_graph_top_%d_thresh%s_pruned' % (args.topk,LINK_THRESHOLD))
-            draw_weight_graph(subnodes, subweights, graph_fname, Name1, Name2)
+            for LINK_THRESHOLD in [0.0, 0.025,0.05,0.075,0.1]:
+                # --prune all the weights that are less important than 0.1
+                for lay_i in range(len(join_weights)):  # each layer
+                    lay_w = join_weights[lay_i]
+                    lay_w[lay_w < LINK_THRESHOLD] = 0.0
+                # --prune all the nodes that are not connected to the destination
+                subnodes, subweights = prune_subgraph(join_nodes, join_weights, list(argsort1[:args.topk].T))
+                graph_fname = os.path.join(vis_dir, 'joint_graph_top_%d_thresh%s_pruned' % (args.topk,LINK_THRESHOLD))
+                draw_weight_graph(subnodes, subweights, graph_fname, Name1, Name2,content["bac_group_DA"], content["met_group_DA"], content["z_DA"])
 
         #FINAL MODEL
         # Train a single model on all data
@@ -381,7 +380,9 @@ def main(args):
                 lay_w[lay_w < LINK_THRESHOLD] = 0.0
             subnodes, subweights = prune_subgraph(nodes, weights, list(argsort[:args.topk].T))
             graph_fname = os.path.join(vis_dir, 'graph_top%d' % args.topk)
-            draw_weight_graph(subnodes, subweights, graph_fname, Name1, Name2)
+            draw_weight_graph(subnodes, subweights, graph_fname,
+                              Name1, Name2,
+                              content["bac_group_DA"], content["met_group_DA"], content["z_DA"])
 
         print(model_alias, meaning)
         print("CV %s-->%s, ci %4.2f rmse %4.2f, meancc:%4.2f, cc best %s/%4.2f, top %d:%4.2f, #link %s \n top10:%s"%(
@@ -410,10 +411,10 @@ def main(args):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-
+    parser.add_argument("--data_root", type=str, default='/data/BioHealth/IBD')
     parser.add_argument("--model", type=str, default='BiomeAE')
     parser.add_argument("--fea1", type=str, default='bac_group_fea')
-    parser.add_argument("--fea2", type=str, default='met_fea')
+    parser.add_argument("--fea2", type=str, default='met_group_fea')
     parser.add_argument("--dataset_name", type=str, default='ibd')
     parser.add_argument("--data_type", type=str, default='clr', help="clr: log(x) - mean(log(x)), 0-1: x/sum(x)")
     parser.add_argument("--cross_val_folds", type=int, default=5)

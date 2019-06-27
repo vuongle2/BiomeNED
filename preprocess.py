@@ -4,25 +4,28 @@ import argparse
 import csv
 import numpy as np
 import pickle
-from sklearn.decomposition import NMF, PCA
-from sklearn.manifold import TSNE
-from sklearn import metrics
-from utils import read_csv_table
+from utils import read_csv_table, read_csv_table_raw
 
 
 
 def main(args):
-    metabolite_file = "/data/BioHealth/IBD/ibd-x1-met-zComp-{}.csv".format(args.data_type)
-    bacteria_file   = "/data/BioHealth/IBD/ibd-x2-mic-zComp-{}.csv".format(args.data_type)
-    metabolite_group_file = "/data/BioHealth/IBD/ibd-x1-met-zComp-grouped-{}.csv".format(args.data_type)
-    bacteria_group_file = "/data/BioHealth/IBD/ibd-x2-mic-zComp-grouped-{}.csv".format(args.data_type)
-    bacteria_taxa_file = "/data/BioHealth/IBD/mic-taxa-itis-v2.csv"
-    label_file      = "/data/BioHealth/IBD/ibd-y.csv"
-    output_file ="/data/BioHealth/IBD/ibd_{}.pkl".format(args.data_type)
+    metabolite_file = os.path.join(args.data_root, "ibd-x1-met-zComp-{}.csv".format(args.data_type))
+    bacteria_file   = os.path.join(args.data_root, "ibd-x2-mic-zComp-{}.csv".format(args.data_type))
+    metabolite_group_file = os.path.join(args.data_root, "ibd-x1-met-zComp-grouped-{}.csv".format(args.data_type))
+    bacteria_group_file = os.path.join(args.data_root, "ibd-x2-mic-zComp-grouped-{}.csv".format(args.data_type))
+    bacteria_taxa_file = os.path.join(args.data_root, "mic-taxa-itis-v2.csv")
+    label_file      = os.path.join(args.data_root, "ibd-y.csv")
+    output_file =os.path.join(args.data_root, "ibd_{}.pkl".format(args.data_type))
+    met_group_DA_file =os.path.join(args.data_root, "6-DA-x1-Met-Group.csv")
+    bac_group_DA_file = os.path.join(args.data_root, "6-DA-x2-Mic-Group.csv")
+    z_DA_file = os.path.join(args.data_root, "7-latent-z-DA.csv")
 
     #Process metabolite:
     subject_ids, met_ids, met_fea = read_csv_table(metabolite_file)
     subject_ids, met_group_ids, met_group_fea = read_csv_table(metabolite_group_file)
+    met_c_name, met_group_DA = read_csv_table_raw(met_group_DA_file)
+    bac_c_name, bac_group_DA = read_csv_table_raw(bac_group_DA_file)
+    z_c_name, z_DA = read_csv_table_raw(z_DA_file)
     met_fea = met_fea.astype(np.float)
     met_group_fea = met_group_fea.astype(np.float)
     #undo preprocessing:
@@ -110,7 +113,10 @@ def main(args):
             "bac_group_fea": bac_group_fea,
             "train_idx":train_idx,
             "val_idx":val_idx,
-            "diagnosis":diagnosis}
+            "diagnosis":diagnosis,
+    "met_group_DA": met_group_DA,
+    "bac_group_DA": bac_group_DA,
+    "z_DA": z_DA,}
     with open(output_file,'wb') as of:
         pickle.dump(out_data, of, protocol=2)
     print("written %s"%output_file)
@@ -119,8 +125,9 @@ def main(args):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--data_root", type=str, default='/data/BioHealth/IBD')
     parser.add_argument("--dataset_name", type=str, default='ibd')
-    parser.add_argument("--data_type", type=str, default='0-1', help="clr: log(x) - mean(log(x)), 0-1: log (x/sum(x)))")
+    parser.add_argument("--data_type", type=str, default='clr', help="clr: log(x) - mean(log(x)), 0-1: log (x/sum(x)))")
 
     args = parser.parse_args()
 

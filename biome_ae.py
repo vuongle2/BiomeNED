@@ -8,58 +8,13 @@ import argparse
 import types
 import numpy as np
 import matplotlib.pyplot as plt
-from torchvision import transforms
-from torchvision.datasets import MNIST
 from torch.utils.data import TensorDataset, DataLoader
 from collections import defaultdict
-import logging
-import tensorboard_logger as tl
 
 from sklearn.cross_decomposition import CCA
 from sklearn import linear_model
 from models import  AE, VAE, MLPerceptron, Decoder
 from snip.snip import snip_forward_linear, snip_forward_conv2d
-
-DATA_ROOT = "/data/BioHealth/IBD"
-output_dir = os.path.join(DATA_ROOT, "output")
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
-parser = argparse.ArgumentParser()
-FORMAT = '[%(asctime)s: %(filename)s: %(lineno)4d]: %(message)s'
-#logging.basicConfig(level=logging.INFO, format=FORMAT, stream=sys.stdout)
-#logger = logging.getLogger(__name__)
-
-def load_data(data_file):
-    with open(data_file,"rb") as df:
-        content = pickle.load(df)
-
-    X1 = content[args.fea1] # n x m1
-    X2 = content[args.fea2] # n x m2
-    Y = content["diagnosis"]
-
-    #Suppress to two classes
-    for i in range(len(Y)):
-        if Y[i] !=0:
-            Y[i] =1
-
-    y_keys = [-1]+list(set(Y)) #-1 means all data
-    y_ind  = {}
-    y_ind[-1] = range(len(Y))
-    for y_val in set(Y):
-        y_ind[y_val] = [i for i in range(len(Y)) if Y[i] == y_val]
-
-    #TODO: Cross validation
-    #Split train and val
-    val_ind = content["val_idx"]
-    train_ind = content["train_idx"]
-    X1_train = X1[train_ind]
-    X1_val = X1[val_ind]
-    X2_train = X2[train_ind]
-    X2_val = X2[val_ind]
-    y_train = Y[train_ind]
-    y_val = Y[val_ind]
-
-    return (X1_train, X2_train, y_train),(X1_val, X2_val, y_val)
 
 def get_dataloader(X1, X2, y, batch_size, shuffle=True):
     X1_tensor = torch.FloatTensor(X1)
@@ -843,33 +798,4 @@ class BiomeAESnip(BiomeAE):
             layer.weight.register_hook(hook_factory(keep_mask))
 
 
-if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument("--model", type=str, default='AE')
-    parser.add_argument("--dataset_name", type=str, default='ibd')
-    parser.add_argument("--data_type", type=str, default='clr', help="clr: log(x) - mean(log(x)), 0-1: log (x/sum(x)))")
-    parser.add_argument("--fea1", type=str, default='met_W_pca')
-    parser.add_argument("--fea2", type=str, default='genus_fea')
-
-    parser.add_argument("--sparse", type=str, default="l0")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=10)
-    parser.add_argument("--learning_rate", type=float, default=0.01)
-    parser.add_argument("--activation", type=str, default='relu')
-    parser.add_argument('--dropout', default=0, type=float)
-    parser.add_argument('--batch_norm', default=1, type=bool)
-    parser.add_argument("--latent_size", type=int, default=20)
-    parser.add_argument("--print_every", type=int, default=10)
-    parser.add_argument("--fig_root", type=str, default='figs')
-    parser.add_argument("--conditional", action='store_true')
-
-    parser.add_argument('--gpu_num', default="0", type=str)
-    parser.add_argument("--extra", type=str, default='')
-
-    args = parser.parse_args()
-
-    main(args)
 

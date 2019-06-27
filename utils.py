@@ -97,7 +97,8 @@ def flip_graph(nodes, weights):
     flip_weights = [weights[layer].T for layer in range(len(weights) - 1, -1, -1)]
     return (flip_nodes, flip_weights)
 
-def draw_weight_graph(node_names, link_weights, file_name, Name1 = None, Name2= None):
+
+def draw_weight_graph(node_names, link_weights, file_name, Name1=None, Name2=None, x1_DA=None, x2_DA=None, z_DA=None):
     """
     Draw a graph of weights of a feed forward model
     :param node_names: list of layers x nodes of each layer
@@ -105,14 +106,35 @@ def draw_weight_graph(node_names, link_weights, file_name, Name1 = None, Name2= 
     :param file_name: write to
     :return:
     """
+    node_colors = ["#DDDDDD", "#FDE725", "#21908C"]
+
+    def get_node_color(node_id, DA):
+        if DA is not None and float(DA[int(node_id)]["FDR"]) < 0.05:
+            if float(DA[int(node_id)]["Control"]) > float(DA[int(node_id)]["IBD"]):
+                node_color = node_colors[1]
+            else:
+                node_color = node_colors[2]
+        else:
+            node_color = node_colors[0]
+        return node_color
     u = Digraph(file_name.split('/')[-1], graph_attr={'nodesep': '0.5','ranksep': '5', 'rankdir':'LR'})
+
     for l, layer in enumerate(node_names):
-        for n, node_name in enumerate(layer):
-            if l == 0 and Name1 is not None:
-                node_name = Name1[int(node_name)]
-            if l == len(node_names)-1 and Name2 is not None:
-                node_name = Name2[int(node_name)]
-            u.node("%d_%d"%(l,n), label=str(node_name), color='lightblue2')
+        for n, node_id in enumerate(layer):
+            node_color = node_colors[0] #default
+            if l == 0:
+                node_name = Name1[int(node_id)] if Name1 is not None else str(int(node_id)+1)
+                if x2_DA is not None:# first layer
+                    node_color = get_node_color(node_id, x1_DA)
+            elif l == len(node_names)-1:
+                node_name = Name2[int(node_id)] if Name2 is not None else str(int(node_id)+1)
+                if x2_DA is not None: #last layer
+                    node_color = get_node_color(node_id, x2_DA)
+            else: #middle
+                if z_DA is not None:
+                    node_color = get_node_color(node_id, z_DA)
+                node_name = str(int(node_id)+1) # +1 so that z indexes start with 1
+            u.node("%d_%d"%(l,n), label=str(node_name), fillcolor=node_color, style="filled")
 
     for l, layer_weights in enumerate(link_weights):
         maxw = np.max(np.abs(layer_weights))
@@ -126,6 +148,25 @@ def draw_weight_graph(node_names, link_weights, file_name, Name1 = None, Name2= 
 
     u.render(filename=file_name,format='png')
 
+def read_csv_table_raw(filename):
+    """
+    Assume the csv has the first row to be col names, first col are row name, rest are numbers
+    :param filename:
+    :return: (col_name, data)
+    """
+    with open(filename,'r') as f:
+        spamreader = csv.reader(f, delimiter=',', quotechar='"')
+        data_list = []
+        for r, row in enumerate(spamreader):
+            if r ==0:
+                col_name = row # first cell is empty
+            else:
+                d = {}
+                for i, item in enumerate(row):
+                    d[col_name[i]] = item
+                data_list.append(d)
+        output = (col_name, data_list)
+    return output
 
 def read_csv_table(filename, output_dict=False):
     """
