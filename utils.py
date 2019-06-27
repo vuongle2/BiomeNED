@@ -108,15 +108,17 @@ def draw_weight_graph(node_names, link_weights, file_name, Name1=None, Name2=Non
     """
     node_colors = ["#DDDDDD", "#FDE725", "#21908C"]
 
-    def get_node_color(node_id, DA):
-        if DA is not None and float(DA[int(node_id)]["FDR"]) < 0.05:
-            if float(DA[int(node_id)]["Control"]) > float(DA[int(node_id)]["IBD"]):
-                node_color = node_colors[1]
-            else:
-                node_color = node_colors[2]
-        else:
-            node_color = node_colors[0]
-        return node_color
+    def get_node_color(n_name, DA):
+        n_color = node_colors[0]
+        if DA is not None:
+            this_da = [da for da in DA if da["Name"]==n_name][0]
+            if float(this_da["FDR"]) < 0.05:
+                if float(this_da["Control"]) > float(this_da["IBD"]):
+                    n_color = node_colors[1]
+                else:
+                    n_color = node_colors[2]
+
+        return n_color
     u = Digraph(file_name.split('/')[-1], graph_attr={'nodesep': '0.5','ranksep': '5', 'rankdir':'LR'})
 
     for l, layer in enumerate(node_names):
@@ -124,16 +126,17 @@ def draw_weight_graph(node_names, link_weights, file_name, Name1=None, Name2=Non
             node_color = node_colors[0] #default
             if l == 0:
                 node_name = Name1[int(node_id)] if Name1 is not None else str(int(node_id)+1)
-                if x2_DA is not None:# first layer
-                    node_color = get_node_color(node_id, x1_DA)
+                if x1_DA is not None:# first layer
+                    node_color = get_node_color(node_name, x1_DA)
             elif l == len(node_names)-1:
                 node_name = Name2[int(node_id)] if Name2 is not None else str(int(node_id)+1)
                 if x2_DA is not None: #last layer
-                    node_color = get_node_color(node_id, x2_DA)
+                    node_color = get_node_color(node_name, x2_DA)
             else: #middle
+                node_name = str(int(node_id) + 1)  # +1 so that z indexes start with 1
                 if z_DA is not None:
-                    node_color = get_node_color(node_id, z_DA)
-                node_name = str(int(node_id)+1) # +1 so that z indexes start with 1
+                    node_color = get_node_color(node_name, z_DA)
+
             u.node("%d_%d"%(l,n), label=str(node_name), fillcolor=node_color, style="filled")
 
     for l, layer_weights in enumerate(link_weights):
