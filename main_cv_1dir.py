@@ -210,12 +210,12 @@ def main(args):
 
             nodes12, weights12 = translator.get_graph()
             argsort1 = np.argsort(-test_corrs1_cv[val_ind])
-            if args.draw_graph and args.sparse is not None and args.fea1 !="met_fea":
+            if args.draw_graph and args.sparse is not None and args.fea1 !="bac_fea":
                 prunedn12, prunedw12 = prune_subgraph(nodes12, weights12, list(argsort1[:args.topk].T))
                 graph_fname12 = os.path.join(vis_dir, 'graph_translator_fold%d' % fold)
                 draw_weight_graph(prunedn12, prunedw12, graph_fname12,
                                   Name1, Name2,
-                                  content["bac_group_DA"], content["met_group_DA"], content["z_DA"])
+                                  content.get("%s_DA"%args.fea1.replace("_fea",""), None), content.get("%s_DA"%args.fea2.replace("_fea",""), None), content["z_DA"])
 
         CV_results[fold] = {'test_corrs1':test_corrs1_cv,
                             'avg_acc1':avg_acc1_cv,
@@ -329,7 +329,7 @@ def main(args):
                     ci.append(consistency_index(CV_results[fold1]['weights12'], CV_results[fold2]['weights12']))
             mean_ci = np.array(ci).mean()
 
-        if args.draw_graph:
+        if args.draw_graph and args.sparse is not None and args.fea1 !="bac_fea":
             # Now prune more for interpretation
             for LINK_THRESHOLD in [0.0, 0.025,0.05,0.075,0.1]:
                 # --prune all the weights that are less important than 0.1
@@ -373,7 +373,7 @@ def main(args):
         meantopk = sort[:args.topk].mean()
         l0_weight = translator.param_l0()
 
-        if args.draw_graph:
+        if args.draw_graph  and args.sparse is not None and args.fea1 !="bac_fea":
             # --prune all the weights that are less important than 0.1
             for lay_i in range(len(weights)):  # each layer
                 lay_w = join_weights[lay_i]

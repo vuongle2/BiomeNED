@@ -119,7 +119,7 @@ def draw_weight_graph(node_names, link_weights, file_name, Name1=None, Name2=Non
                     n_color = node_colors[2]
 
         return n_color
-    u = Digraph(file_name.split('/')[-1], graph_attr={'nodesep': '0.5','ranksep': '5', 'rankdir':'LR'})
+    u = Digraph(file_name.split('/')[-1], graph_attr={'nodesep': '0.3','ranksep': '7', 'rankdir':'LR'})
 
     for l, layer in enumerate(node_names):
         for n, node_id in enumerate(layer):
@@ -137,7 +137,7 @@ def draw_weight_graph(node_names, link_weights, file_name, Name1=None, Name2=Non
                 if z_DA is not None:
                     node_color = get_node_color(node_name, z_DA)
 
-            u.node("%d_%d"%(l,n), label=str(node_name), fillcolor=node_color, style="filled")
+            u.node("%d_%d"%(l,n), label=str(node_name), fillcolor=node_color, style="filled", fontsize='15', fontname="times bold")
 
     for l, layer_weights in enumerate(link_weights):
         maxw = np.max(np.abs(layer_weights))
@@ -146,7 +146,7 @@ def draw_weight_graph(node_names, link_weights, file_name, Name1=None, Name2=Non
             for e, en in enumerate(node_names[l+1]):
                 w = layer_weights[b,e]
                 if w!=0.0:
-                    intensity = int((abs(w)-minw)/maxw *50)# range from 1 -100
+                    intensity = 1#int((abs(w)-minw)/maxw *50)# range from 1 -100
                     u.edge("%d_%d"%(l,b), "%d_%d"%(l+1,e), color="Gray%d"%(intensity), arrowhead=None, arrowtail=None)
 
     u.render(filename=file_name,format='png')
