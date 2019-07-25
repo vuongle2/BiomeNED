@@ -411,7 +411,7 @@ def main(args):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_root", type=str, default='/data/BioHealth/IBD')
+    parser.add_argument("--data_root", type=str, default='./data')
     parser.add_argument("--model", type=str, default='BiomeAE')
     parser.add_argument("--fea1", type=str, default='bac_group_fea')
     parser.add_argument("--fea2", type=str, default='met_group_fea')
